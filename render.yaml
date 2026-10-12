@@ -1,0 +1,28 @@
+# Blueprint de Render: New > Blueprint > elegir este repo.
+services:
+  - type: web
+    name: guada-stock-api
+    runtime: node
+    plan: free
+    region: virginia
+    # --prod=false instala también las devDependencies (Nest CLI, Prisma CLI y tsx) que usa el build.
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm build && pnpm db:deploy && pnpm db:seed
+    startCommand: pnpm start:prod
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: DATABASE_URL
+        sync: false # URL de Neon
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 30d
+      - key: CORS_ORIGIN
+        sync: false # URL del front en Cloudflare Pages
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_NAME
+        value: Guada
