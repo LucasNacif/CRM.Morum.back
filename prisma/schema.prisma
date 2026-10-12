@@ -33,11 +33,20 @@ model User {
   email        String   @unique
   name         String
   passwordHash String
+  isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
 
   movements StockMovement[]
   sales     Sale[]
   purchases Purchase[]
+}
+
+/// Configuración del negocio. Siempre hay una sola fila (id = 1).
+model Settings {
+  id            Int      @id @default(1)
+  // Porcentaje sobre el costo para sugerir el precio de venta.
+  markupPercent Decimal  @default(100) @db.Decimal(7, 2)
+  updatedAt     DateTime @updatedAt
 }
 
 model Category {
@@ -72,7 +81,6 @@ model Variant {
   id       String  @id @default(uuid())
   size     String
   color    String
-  sku      String  @unique
   barcode  String  @unique
   cost     Decimal @default(0) @db.Decimal(12, 2)
   price    Decimal @default(0) @db.Decimal(12, 2)
@@ -116,18 +124,6 @@ model StockMovement {
   @@index([createdAt])
 }
 
-model Supplier {
-  id        String   @id @default(uuid())
-  name      String
-  phone     String?
-  email     String?
-  notes     String?
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-
-  purchases Purchase[]
-}
-
 model Purchase {
   id        String   @id @default(uuid())
   number    Int      @unique @default(autoincrement())
@@ -136,10 +132,8 @@ model Purchase {
   note      String?
   createdAt DateTime @default(now())
 
-  supplierId String?
-  supplier   Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-  userId     String
-  user       User      @relation(fields: [userId], references: [id])
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
   items     PurchaseItem[]
   movements StockMovement[]

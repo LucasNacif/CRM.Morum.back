@@ -68,7 +68,8 @@ export class LabelsPdfDto {
 
 interface Label {
   name: string;
-  sku: string;
+  /** Color y talle, para distinguir variantes sin leer el código. */
+  detail: string;
   barcode: string;
 }
 
@@ -90,7 +91,7 @@ export class LabelsService {
 
     const variants = await this.prisma.variant.findMany({
       where: { id: { in: dto.items.map((item) => item.variantId) } },
-      select: { id: true, sku: true, barcode: true, product: { select: { name: true } } },
+      select: { id: true, size: true, color: true, barcode: true, product: { select: { name: true } } },
     });
     const byId = new Map(variants.map((variant) => [variant.id, variant]));
 
@@ -98,7 +99,11 @@ export class LabelsService {
     for (const item of dto.items) {
       const variant = byId.get(item.variantId);
       if (!variant) throw new BadRequestException('Una de las variantes ya no existe');
-      const label = { name: variant.product.name, sku: variant.sku, barcode: variant.barcode };
+      const label = {
+        name: variant.product.name,
+        detail: `${variant.color} ${variant.size}`,
+        barcode: variant.barcode,
+      };
       for (let i = 0; i < item.copies; i++) labels.push(label);
     }
 
@@ -167,7 +172,7 @@ export class LabelsService {
     doc
       .font('Helvetica')
       .fontSize(fontSize)
-      .text(label.sku, x + padX, y + height - padY - lineHeight + 1, textOptions);
+      .text(`${label.barcode} · ${label.detail}`, x + padX, y + height - padY - lineHeight + 1, textOptions);
   }
 }
 

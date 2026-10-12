@@ -18,15 +18,14 @@ import {
 import { PaginationDto } from '../common/pagination.dto.js';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
-const trimUpper = ({ value }: { value: unknown }) =>
-  typeof value === 'string' ? value.trim().toUpperCase() : value;
 // Los formularios mandan '' cuando el campo queda vacío: se trata como "no enviado".
 const emptyToUndefined = ({ value }: { value: unknown }) =>
   typeof value === 'string' && value.trim() === '' ? undefined : trim({ value });
 const toBoolean = ({ value }: { value: unknown }) => value === true || value === 'true';
 
-const CODE_PATTERN = /^[A-Za-z0-9._-]{3,40}$/;
-const CODE_MESSAGE = 'Solo letras, números, punto, guion y guion bajo (3 a 40 caracteres)';
+// Solo dígitos: es lo que cualquier lector lee sin configurarlo, y cubre los códigos de fábrica (EAN/UPC).
+const BARCODE_PATTERN = /^\d{4,20}$/;
+const BARCODE_MESSAGE = 'Código de barras inválido. Solo números (4 a 20 dígitos)';
 
 export class CreateVariantDto {
   @Transform(trim)
@@ -41,16 +40,10 @@ export class CreateVariantDto {
   @MaxLength(40)
   color: string;
 
-  /** Si no se envía se genera a partir de producto, color y talle. */
-  @IsOptional()
-  @Transform(({ value }) => emptyToUndefined({ value: trimUpper({ value }) }))
-  @Matches(CODE_PATTERN, { message: `SKU inválido. ${CODE_MESSAGE}` })
-  sku?: string;
-
   /** Si no se envía se asigna el siguiente código interno. Sirve para cargar un código de fábrica. */
   @IsOptional()
   @Transform(emptyToUndefined)
-  @Matches(CODE_PATTERN, { message: `Código de barras inválido. ${CODE_MESSAGE}` })
+  @Matches(BARCODE_PATTERN, { message: BARCODE_MESSAGE })
   barcode?: string;
 
   @IsNumber({ maxDecimalPlaces: 2 })
@@ -88,13 +81,8 @@ export class UpdateVariantDto {
   color?: string;
 
   @IsOptional()
-  @Transform(trimUpper)
-  @Matches(CODE_PATTERN, { message: `SKU inválido. ${CODE_MESSAGE}` })
-  sku?: string;
-
-  @IsOptional()
   @Transform(trim)
-  @Matches(CODE_PATTERN, { message: `Código de barras inválido. ${CODE_MESSAGE}` })
+  @Matches(BARCODE_PATTERN, { message: BARCODE_MESSAGE })
   barcode?: string;
 
   @IsOptional()

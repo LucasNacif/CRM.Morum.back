@@ -10,12 +10,12 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
-  IsBoolean,
+  Matches,
   IsDate,
   IsInt,
   IsNumber,
@@ -23,6 +23,7 @@ import {
   IsString,
   IsUUID,
   MaxLength,
+  MinLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -30,8 +31,14 @@ import { CurrentUser, type AuthUser } from '../common/decorators.js';
 import { paginated, PaginationDto } from '../common/pagination.dto.js';
 import { MovementType, Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { ProductsService } from '../products/products.service.js';
 import { StockService } from '../stock/stock.service.js';
 
+const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
+const emptyToUndefined = ({ value }: { value: unknown }) =>
+  typeof value === 'string' && value.trim() === '' ? undefined : trim({ value });
+
+/** Reposición de una prenda que ya existe. */
 export class PurchaseItemDto {
   @IsUUID()
   variantId: string;
@@ -40,16 +47,72 @@ export class PurchaseItemDto {
   @Min(1)
   quantity: number;
 
+  /** Lo que se pagó por unidad. Pasa a ser el costo de la prenda. */
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   unitCost: number;
+
+  /** Nuevo precio de venta. Si no se envía, el precio no cambia. */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  price?: number;
+}
+
+export class NewVariantDto {
+  @Transform(trim)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(20)
+  size: string;
+
+  @Transform(trim)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  color: string;
+
+  /** Código de fábrica. Si no se envía se asigna uno interno. */
+  @IsOptional()
+  @Transform(emptyToUndefined)
+  @Matches(/^\d{4,20}$/, { message: 'Código de barras inválido. Solo números (4 a 20 dígitos)' })
+  barcode?: string;
+
+  @IsInt()
+  @Min(1)
+  quantity: number;
+
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  unitCost: number;
+
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  price: number;
+}
+
+/** Producto que entra por primera vez: se da de alta junto con la compra. */
+export class NewProductDto {
+  @Transform(trim)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(120)
+  name: string;
+
+  @IsOptional()
+  @Transform(emptyToUndefined)
+  @IsUUID()
+  categoryId?: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => NewVariantDto)
+  variants: NewVariantDto[];
 }
 
 export class CreatePurchaseDto {
-  @IsOptional()
-  @IsUUID()
-  supplierId?: string;
-
   @IsOptional()
   @Type(() => Date)
   @IsDate()
@@ -60,26 +123,25 @@ export class CreatePurchaseDto {
   @MaxLength(500)
   note?: string;
 
-  /** Actualiza el costo de cada variante con el de esta compra. Por defecto sí. */
   @IsOptional()
-  @IsBoolean()
-  updateCost?: boolean;
-
   @IsArray()
-  @ArrayMinSize(1)
   @ArrayMaxSize(300)
   @ValidateNested({ each: true })
   @Type(() => PurchaseItemDto)
-  items: PurchaseItemDto[];
+  items?: PurchaseItemDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ValidateNested({ each: true })
+  @Type(() => NewProductDto)
+  newProducts?: NewProductDto[];
 }
 
 const purchaseInclude = {
-  supplier: { select: { id: true, name: true } },
   items: {
     include: {
-      variant: {
-        select: { sku: true, size: true, color: true, product: { select: { id: true, name: true } } },
-      },
+      variant: { include: { product: { select: { id: true, name: true } } } },
     },
   },
 } satisfies Prisma.PurchaseInclude;
@@ -89,41 +151,67 @@ export class PurchasesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stock: StockService,
+    private readonly products: ProductsService,
   ) {}
 
+  /**
+   * Único camino por el que entra mercadería: repone prendas existentes y da de alta las nuevas,
+   * todo en una transacción. Si algo falla no queda ni el producto ni el stock a medias.
+   */
   create(dto: CreatePurchaseDto, userId: string) {
-    const variantIds = dto.items.map((item) => item.variantId);
-    if (new Set(variantIds).size !== variantIds.length) {
-      throw new BadRequestException('Hay una variante repetida en la compra');
+    const items = dto.items ?? [];
+    const newProducts = dto.newProducts ?? [];
+    if (items.length === 0 && newProducts.length === 0) {
+      throw new BadRequestException('La compra no tiene prendas');
     }
-    const total = dto.items.reduce(
-      (sum, item) => sum.plus(new Prisma.Decimal(item.unitCost).times(item.quantity)),
-      new Prisma.Decimal(0),
-    );
+    const variantIds = items.map((item) => item.variantId);
+    if (new Set(variantIds).size !== variantIds.length) {
+      throw new BadRequestException('Hay una prenda repetida en la compra');
+    }
 
     return this.prisma.$transaction(async (tx) => {
+      const lines: { variantId: string; quantity: number; unitCost: number; price?: number }[] = items.map(
+        ({ variantId, quantity, unitCost, price }) => ({ variantId, quantity, unitCost, price }),
+      );
+      for (const { variants, name, categoryId } of newProducts) {
+        const created = await this.products.createInTransaction(
+          tx,
+          { name, categoryId },
+          variants.map(({ size, color, barcode, unitCost, price }) => ({ size, color, barcode, cost: unitCost, price })),
+          userId,
+        );
+        created.forEach((variant, index) => {
+          const { quantity, unitCost } = variants[index];
+          lines.push({ variantId: variant.id, quantity, unitCost });
+        });
+      }
+
+      const total = lines.reduce(
+        (sum, line) => sum.plus(new Prisma.Decimal(line.unitCost).times(line.quantity)),
+        new Prisma.Decimal(0),
+      );
       const purchase = await tx.purchase.create({
         data: {
-          supplierId: dto.supplierId,
           date: dto.date,
           note: dto.note,
           total,
           userId,
-          items: { create: dto.items },
+          items: { create: lines.map(({ variantId, quantity, unitCost }) => ({ variantId, quantity, unitCost })) },
         },
       });
-      for (const item of dto.items) {
+      for (const line of lines) {
         await this.stock.applyMovement(tx, {
-          variantId: item.variantId,
-          quantity: item.quantity,
+          variantId: line.variantId,
+          quantity: line.quantity,
           type: MovementType.PURCHASE,
           userId,
           purchaseId: purchase.id,
           note: `Compra #${purchase.number}`,
         });
-        if (dto.updateCost !== false) {
-          await tx.variant.update({ where: { id: item.variantId }, data: { cost: item.unitCost } });
-        }
+        await tx.variant.update({
+          where: { id: line.variantId },
+          data: { cost: line.unitCost, price: line.price },
+        });
       }
       return tx.purchase.findUniqueOrThrow({ where: { id: purchase.id }, include: purchaseInclude });
     });
@@ -135,7 +223,7 @@ export class PurchasesService {
         orderBy: { date: 'desc' },
         skip: q.skip,
         take: q.pageSize,
-        include: { supplier: { select: { id: true, name: true } }, _count: { select: { items: true } } },
+        include: { _count: { select: { items: true } } },
       }),
       this.prisma.purchase.count(),
     ]);

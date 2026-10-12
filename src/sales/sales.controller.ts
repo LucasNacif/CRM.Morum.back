@@ -93,7 +93,7 @@ const saleInclude = {
   items: {
     include: {
       variant: {
-        select: { sku: true, size: true, color: true, product: { select: { id: true, name: true } } },
+        select: { barcode: true, size: true, color: true, product: { select: { id: true, name: true } } },
       },
     },
   },

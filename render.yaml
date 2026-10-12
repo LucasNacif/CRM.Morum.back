@@ -1,7 +1,7 @@
 # Blueprint de Render: New > Blueprint > elegir este repo.
 services:
   - type: web
-    name: guada-stock-api
+    name: morum-stock-api
     runtime: node
     plan: free
     region: virginia
@@ -25,4 +25,4 @@ services:
       - key: ADMIN_PASSWORD
         sync: false
       - key: ADMIN_NAME
-        value: Guada
+        value: Morum

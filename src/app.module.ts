@@ -11,9 +11,10 @@ import { ProductsController, VariantsController } from './products/products.cont
 import { ProductsService } from './products/products.service.js';
 import { PurchasesController, PurchasesService } from './purchases/purchases.controller.js';
 import { ReportsController, ReportsService } from './reports/reports.controller.js';
+import { SettingsController } from './settings/settings.controller.js';
+import { UsersController } from './users/users.controller.js';
 import { SalesController, SalesService } from './sales/sales.controller.js';
 import { StockModule } from './stock/stock.module.js';
-import { SuppliersController } from './suppliers/suppliers.controller.js';
 
 @Module({
   imports: [
@@ -28,11 +29,12 @@ import { SuppliersController } from './suppliers/suppliers.controller.js';
     CategoriesController,
     ProductsController,
     VariantsController,
-    SuppliersController,
     PurchasesController,
     SalesController,
     LabelsController,
     ReportsController,
+    SettingsController,
+    UsersController,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

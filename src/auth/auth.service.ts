@@ -14,7 +14,7 @@ export class AuthService {
   async login({ email, password }: LoginDto) {
     const user = await this.prisma.user.findUnique({ where: { email } });
     // Mismo mensaje para email o clave incorrectos: no revelar qué emails existen.
-    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+    if (!user?.isActive || !(await bcrypt.compare(password, user.passwordHash))) {
       throw new UnauthorizedException('Email o contraseña incorrectos');
     }
     const accessToken = await this.jwt.signAsync({ sub: user.id, email: user.email });

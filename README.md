@@ -1,4 +1,4 @@
-# Guada Stock · API
+# Morum · API
 
 Backend del sistema de control de stock: NestJS 12 + PostgreSQL + Prisma 7.
 
@@ -22,10 +22,10 @@ pnpm start:dev            # http://localhost:3000/api
 - **Stock por libro de movimientos.** `Variant.stock` nunca se edita directo: todo cambio pasa por
   `StockService.applyMovement`, que actualiza el saldo y registra un `StockMovement` en la misma
   transacción. El stock no puede quedar negativo, ni siquiera con dos ventas simultáneas.
-- **Producto → variantes.** Cada variante (talle + color) tiene su SKU legible y su código de barras.
+- **Producto → variantes.** Cada variante (talle + color) se identifica por su código de barras.
   Los códigos internos son Code 128 numéricos de 8 dígitos (secuencia `barcode_seq`); también se
   puede cargar el código de fábrica de la prenda.
-- **Nada con historial se borra.** Productos, variantes y proveedores usados se desactivan; las
+- **Nada con historial se borra.** Productos y variantes usados se desactivan; las
   ventas se anulan (y devuelven stock) en lugar de eliminarse.
 - **Auth.** JWT con guard global; solo `/api/auth/login` y `/api/health` son públicas.
 
@@ -33,7 +33,7 @@ pnpm start:dev            # http://localhost:3000/api
 | --- | --- |
 | Auth | `POST /auth/login`, `GET /auth/me`, `POST /auth/change-password` |
 | Productos | `/products`, `/products/:id/variants`, `/variants`, `GET /variants/lookup?code=` |
-| Categorías y proveedores | `/categories`, `/suppliers` |
+| Categorías | `/categories` |
 | Stock | `GET /stock/movements`, `POST /stock/adjustments` |
 | Compras y ventas | `/purchases`, `/sales`, `POST /sales/:id/cancel` |
 | Etiquetas | `GET /labels/layouts`, `POST /labels/pdf` |
@@ -47,7 +47,7 @@ Todas las rutas llevan el prefijo `/api`.
 2. **Render** (render.com): *New > Blueprint* y elegir este repo. `render.yaml` ya define build,
    migraciones, seed y health check. Completar las variables que pide:
    - `DATABASE_URL`: la de Neon.
-   - `CORS_ORIGIN`: la URL del frontend (ej. `https://guada-stock.pages.dev`).
+   - `CORS_ORIGIN`: la URL del frontend (ej. `https://morum-stock.pages.dev`).
    - `ADMIN_EMAIL` y `ADMIN_PASSWORD`: el usuario con el que vas a entrar.
 3. La API queda en `https://<nombre>.onrender.com/api`.
 

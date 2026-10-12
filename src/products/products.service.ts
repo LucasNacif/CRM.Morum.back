@@ -3,7 +3,6 @@ import { paginated } from '../common/pagination.dto.js';
 import { MovementType, Prisma } from '../generated/prisma/client.js';
 import { PrismaService, type Tx } from '../prisma/prisma.service.js';
 import { StockService } from '../stock/stock.service.js';
-import { buildSku, uniqueSku } from './codes.js';
 import {
   CreateProductDto,
   CreateVariantDto,
@@ -39,7 +38,7 @@ export class ProductsService {
       where.OR = [
         { name: contains },
         { brand: contains },
-        { variants: { some: { OR: [{ sku: contains }, { barcode: q.search }] } } },
+        { variants: { some: { OR: [{ color: contains }, { barcode: q.search }] } } },
       ];
     }
     const [items, total] = await Promise.all([
@@ -68,6 +67,17 @@ export class ProductsService {
       await this.createVariants(tx, product, variants, userId);
       return tx.product.findUniqueOrThrow({ where: { id: product.id }, include: productInclude });
     });
+  }
+
+  /** Alta de un producto dentro de una transacción ajena: la usa el registro de compras. */
+  async createInTransaction(
+    tx: Tx,
+    data: { name: string; categoryId?: string },
+    variants: CreateVariantDto[],
+    userId: string,
+  ) {
+    const product = await tx.product.create({ data });
+    return this.createVariants(tx, product, variants, userId);
   }
 
   update(id: string, dto: UpdateProductDto) {
@@ -114,15 +124,10 @@ export class ProductsService {
     return { deleted: true, deactivated: false };
   }
 
-  /** Busca por lo que lee el escáner: código de barras exacto o, si no, SKU. */
+  /** Busca por lo que lee el escáner: el código de barras exacto. */
   async lookup(code: string) {
     const value = code.trim();
-    const variant =
-      (await this.prisma.variant.findUnique({ where: { barcode: value }, include: variantInclude })) ??
-      (await this.prisma.variant.findFirst({
-        where: { sku: { equals: value, mode: 'insensitive' } },
-        include: variantInclude,
-      }));
+    const variant = await this.prisma.variant.findUnique({ where: { barcode: value }, include: variantInclude });
     if (!variant) throw new NotFoundException(`No hay ninguna prenda con el código ${value}`);
     return variant;
   }
@@ -132,7 +137,7 @@ export class ProductsService {
     if (q.search) {
       const like = `%${q.search}%`;
       conditions.push(
-        Prisma.sql`(p."name" ILIKE ${like} OR v."sku" ILIKE ${like} OR v."barcode" = ${q.search} OR v."color" ILIKE ${like})`,
+        Prisma.sql`(p."name" ILIKE ${like} OR v."barcode" = ${q.search} OR v."color" ILIKE ${like})`,
       );
     }
     // Comparar dos columnas entre sí no se puede expresar con el where de Prisma.
@@ -161,22 +166,19 @@ export class ProductsService {
 
   private async createVariants(
     tx: Tx,
-    product: { id: string; name: string },
+    product: { id: string },
     dtos: CreateVariantDto[],
     userId: string,
   ) {
     const created: { id: string }[] = [];
-    const assigned = new Set<string>();
-    for (const { initialStock = 0, sku, barcode, ...data } of dtos) {
+    for (const { initialStock = 0, barcode, ...data } of dtos) {
       const variant = await tx.variant.create({
         data: {
           ...data,
           productId: product.id,
-          sku: sku ?? (await this.nextSku(tx, buildSku(product.name, data.color, data.size), assigned)),
           barcode: barcode ?? (await this.nextBarcode(tx)),
         },
       });
-      assigned.add(variant.sku);
       if (initialStock > 0) {
         await this.stock.applyMovement(tx, {
           variantId: variant.id,
@@ -189,14 +191,6 @@ export class ProductsService {
       created.push(variant);
     }
     return created;
-  }
-
-  private async nextSku(tx: Tx, base: string, assigned: Set<string>) {
-    const existing = await tx.variant.findMany({
-      where: { sku: { startsWith: base } },
-      select: { sku: true },
-    });
-    return uniqueSku(base, new Set([...existing.map((v) => v.sku), ...assigned]));
   }
 
   private async nextBarcode(tx: Tx): Promise<string> {

@@ -65,9 +65,9 @@ export class ReportsService {
         FROM "Variant" v JOIN "Product" p ON p."id" = v."productId"
         WHERE v."isActive" AND p."isActive"`),
       this.prisma.$queryRaw<
-        { id: string; productId: string; name: string; sku: string; size: string; color: string; stock: number; minStock: number }[]
+        { id: string; productId: string; name: string; size: string; color: string; stock: number; minStock: number }[]
       >(Prisma.sql`
-        SELECT v."id", p."id" AS "productId", p."name", v."sku", v."size", v."color", v."stock", v."minStock"
+        SELECT v."id", p."id" AS "productId", p."name", v."size", v."color", v."stock", v."minStock"
         FROM "Variant" v JOIN "Product" p ON p."id" = v."productId"
         WHERE v."isActive" AND p."isActive" AND v."stock" <= v."minStock"
         ORDER BY v."stock" - v."minStock", p."name"
@@ -132,13 +132,12 @@ export class ReportsService {
       orderBy: [{ product: { name: 'asc' } }, { color: 'asc' }, { size: 'asc' }],
     });
     return toCsv(
-      ['Producto', 'Categoría', 'Color', 'Talle', 'SKU', 'Código de barras', 'Stock', 'Stock mínimo', 'Costo', 'Precio', 'Valor a costo', 'Valor a precio'],
+      ['Producto', 'Categoría', 'Color', 'Talle', 'Código de barras', 'Stock', 'Stock mínimo', 'Costo', 'Precio', 'Valor a costo', 'Valor a precio'],
       variants.map((v) => [
         v.product.name,
         v.product.category?.name,
         v.color,
         v.size,
-        v.sku,
         v.barcode,
         v.stock,
         v.minStock,
@@ -161,7 +160,7 @@ export class ReportsService {
       return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)} ${iso.slice(11, 16)}`;
     };
     return toCsv(
-      ['Venta', 'Fecha', 'Estado', 'Producto', 'Color', 'Talle', 'SKU', 'Cantidad', 'Precio unitario', 'Costo unitario', 'Medio de pago', 'Descuento de la venta', 'Total de la venta', 'Cliente'],
+      ['Venta', 'Fecha', 'Estado', 'Producto', 'Color', 'Talle', 'Código de barras', 'Cantidad', 'Precio unitario', 'Costo unitario', 'Medio de pago', 'Descuento de la venta', 'Total de la venta', 'Cliente'],
       sales.flatMap((sale) =>
         sale.items.map((item) => [
           sale.number,
@@ -170,7 +169,7 @@ export class ReportsService {
           item.variant.product.name,
           item.variant.color,
           item.variant.size,
-          item.variant.sku,
+          item.variant.barcode,
           item.quantity,
           money(item.unitPrice),
           money(item.unitCost),

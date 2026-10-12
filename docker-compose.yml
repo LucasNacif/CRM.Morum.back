@@ -3,9 +3,9 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: guada
-      POSTGRES_PASSWORD: guada
-      POSTGRES_DB: guada_stock
+      POSTGRES_USER: morum
+      POSTGRES_PASSWORD: morum
+      POSTGRES_DB: morum_stock
     ports:
       - '5433:5432'
     volumes:

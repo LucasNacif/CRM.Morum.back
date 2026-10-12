@@ -30,12 +30,12 @@ export class StockService {
     const variant = await tx.variant.update({
       where: { id: input.variantId },
       data: { stock: { increment: input.quantity } },
-      select: { stock: true, sku: true },
+      select: { stock: true, size: true, color: true, product: { select: { name: true } } },
     });
     if (variant.stock < 0) {
       const available = variant.stock - input.quantity;
       throw new ConflictException(
-        `Stock insuficiente para ${variant.sku}: hay ${available} y se pidieron ${-input.quantity}`,
+        `Stock insuficiente para ${variant.product.name} (${variant.color} ${variant.size}): hay ${available} y se pidieron ${-input.quantity}`,
       );
     }
     return tx.stockMovement.create({
@@ -89,7 +89,7 @@ export class StockService {
         take: q.pageSize,
         include: {
           variant: {
-            select: { sku: true, size: true, color: true, product: { select: { id: true, name: true } } },
+            select: { barcode: true, size: true, color: true, product: { select: { id: true, name: true } } },
           },
           sale: { select: { id: true, number: true } },
           purchase: { select: { id: true, number: true } },
