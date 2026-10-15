@@ -23,16 +23,17 @@ async function main() {
   });
   console.log(`Usuario listo: ${email}`);
 
+  // Morum es ropa; Clarus, maquillaje y skincare.
   for (const business of [
-    { id: 'morum', name: 'Morum' },
-    { id: 'clarus', name: 'Clarus' },
+    { id: 'morum', name: 'Morum', categories: ['Remeras', 'Pantalones', 'Buzos', 'Camperas', 'Vestidos', 'Accesorios'] },
+    { id: 'clarus', name: 'Clarus', categories: ['Labios', 'Ojos', 'Rostro', 'Skincare', 'Cuidado corporal', 'Accesorios'] },
   ]) {
-    await prisma.business.upsert({ where: { id: business.id }, update: {}, create: business });
+    await prisma.business.upsert({ where: { id: business.id }, update: {}, create: { id: business.id, name: business.name } });
     await prisma.settings.upsert({ where: { businessId: business.id }, update: {}, create: { businessId: business.id } });
     // Solo en un negocio sin categorías: las que se borren desde la app no tienen que volver en cada deploy.
     if ((await prisma.category.count({ where: { businessId: business.id } })) === 0) {
       await prisma.category.createMany({
-        data: ['Remeras', 'Pantalones', 'Buzos', 'Camperas', 'Vestidos', 'Accesorios'].map((name) => ({
+        data: business.categories.map((name) => ({
           name,
           businessId: business.id,
         })),
