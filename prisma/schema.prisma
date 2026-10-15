@@ -95,7 +95,6 @@ model Product {
   name        String
   description String?
   brand       String?
-  imageUrl    String?
   isActive    Boolean  @default(true)
   // Reservado para el catálogo público: solo se exhiben los publicados.
   isPublished Boolean  @default(false)
@@ -103,10 +102,11 @@ model Product {
   updatedAt   DateTime @updatedAt
 
   businessId String
-  business   Business  @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  business   Business       @relation(fields: [businessId], references: [id], onDelete: Restrict)
   categoryId String?
-  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  category   Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   variants   Variant[]
+  images     ProductImage[]
 
   @@index([businessId, name])
   @@index([categoryId])
@@ -282,4 +282,21 @@ model PurchaseExpense {
   purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
 
   @@index([purchaseId])
+}
+
+/// Foto de un producto. El archivo vive en Cloudflare R2; acá solo su ubicación.
+model ProductImage {
+  id        String   @id @default(uuid())
+  // Ruta del archivo en el bucket, sin extensión: de ahí salen la versión grande y la miniatura.
+  key       String   @unique
+  // Color al que corresponde la foto (en ropa, la remera negra no es la blanca). Vacío = todas.
+  color     String?
+  // Orden de aparición: la de menor posición es la principal.
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, position])
 }

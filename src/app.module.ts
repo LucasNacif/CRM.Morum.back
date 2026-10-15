@@ -9,7 +9,9 @@ import { CategoriesController } from './categories/categories.controller.js';
 import { LabelsController, LabelsService } from './labels/labels.controller.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { ProductsController, VariantsController } from './products/products.controller.js';
+import { ProductImagesController, ProductImagesService } from './products/images.js';
 import { ProductsService } from './products/products.service.js';
+import { StorageService } from './storage/storage.service.js';
 import { PurchasesController, PurchasesService } from './purchases/purchases.controller.js';
 import { ReportsController, ReportsService } from './reports/reports.controller.js';
 import { SettingsController } from './settings/settings.controller.js';
@@ -30,6 +32,7 @@ import { StockModule } from './stock/stock.module.js';
     CategoriesController,
     ProductsController,
     VariantsController,
+    ProductImagesController,
     PurchasesController,
     SalesController,
     LabelsController,
@@ -41,6 +44,8 @@ import { StockModule } from './stock/stock.module.js';
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: BusinessGuard },
     ProductsService,
+    ProductImagesService,
+    StorageService,
     PurchasesService,
     SalesService,
     LabelsService,

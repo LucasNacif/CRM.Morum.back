@@ -11,5 +11,15 @@ services:
     volumes:
       - db_data:/var/lib/postgresql/data
 
+  # Simula Cloudflare R2 en local (misma API S3) para probar las fotos sin tocar producción.
+  storage:
+    image: adobe/s3mock:latest
+    restart: unless-stopped
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: morum-fotos
+      COM_ADOBE_TESTING_S3MOCK_STORE_RETAIN_FILES_ON_EXIT: 'true'
+    ports:
+      - '9090:9090'
+
 volumes:
   db_data:

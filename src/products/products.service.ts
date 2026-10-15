@@ -4,6 +4,7 @@ import { roundPrice } from '../common/pricing.js';
 import { MovementType, Prisma } from '../generated/prisma/client.js';
 import { PrismaService, type Tx } from '../prisma/prisma.service.js';
 import { StockService } from '../stock/stock.service.js';
+import { ProductImagesService } from './images.js';
 import {
   BulkPricesDto,
   CreateProductDto,
@@ -17,6 +18,7 @@ import {
 const productInclude = {
   category: true,
   variants: { orderBy: [{ color: 'asc' }, { size: 'asc' }] },
+  images: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
 } satisfies Prisma.ProductInclude;
 
 const variantInclude = {
@@ -28,7 +30,13 @@ export class ProductsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stock: StockService,
+    private readonly images: ProductImagesService,
   ) {}
+
+  /** Agrega a cada foto sus URLs públicas. */
+  private present<T extends { images: { key: string }[] }>(product: T) {
+    return { ...product, images: product.images.map((image) => this.images.present(image)) };
+  }
 
   async list(businessId: string, q: ProductsQueryDto) {
     const where: Prisma.ProductWhereInput = {
@@ -54,13 +62,17 @@ export class ProductsService {
       }),
       this.prisma.product.count({ where }),
     ]);
-    return paginated(items, total, q);
+    return paginated(
+      items.map((item) => this.present(item)),
+      total,
+      q,
+    );
   }
 
   async get(businessId: string, id: string) {
     const product = await this.prisma.product.findFirst({ where: { id, businessId }, include: productInclude });
     if (!product) throw new NotFoundException('No se encontró el producto');
-    return product;
+    return this.present(product);
   }
 
   async create(businessId: string, dto: CreateProductDto, userId: string) {
@@ -69,7 +81,7 @@ export class ProductsService {
     return this.prisma.$transaction(async (tx) => {
       const product = await tx.product.create({ data: { ...data, businessId } });
       await this.createVariants(tx, product, variants, userId);
-      return tx.product.findUniqueOrThrow({ where: { id: product.id }, include: productInclude });
+      return this.present(await tx.product.findUniqueOrThrow({ where: { id: product.id }, include: productInclude }));
     });
   }
 
@@ -89,7 +101,7 @@ export class ProductsService {
   async update(businessId: string, id: string, dto: UpdateProductDto) {
     await this.get(businessId, id);
     await this.assertCategory(businessId, dto.categoryId);
-    return this.prisma.product.update({ where: { id }, data: dto, include: productInclude });
+    return this.present(await this.prisma.product.update({ where: { id }, data: dto, include: productInclude }));
   }
 
   /** Un mismo precio para todas las variantes del producto. */
@@ -113,7 +125,9 @@ export class ProductsService {
       ]);
       return { deleted: false, deactivated: true };
     }
+    const images = await this.prisma.productImage.findMany({ where: { productId: id }, select: { key: true } });
     await this.prisma.product.delete({ where: { id } });
+    await this.images.removeFiles(images.map((image) => image.key));
     return { deleted: true, deactivated: false };
   }
 

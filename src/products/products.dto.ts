@@ -7,7 +7,6 @@ import {
   IsNumber,
   IsOptional,
   IsString,
-  IsUrl,
   IsUUID,
   Matches,
   Max,
@@ -127,11 +126,6 @@ export class CreateProductDto {
 
   @IsOptional()
   @Transform(emptyToUndefined)
-  @IsUrl({ require_protocol: true })
-  imageUrl?: string;
-
-  @IsOptional()
-  @Transform(emptyToUndefined)
   @IsUUID()
   categoryId?: string;
 
@@ -162,12 +156,6 @@ export class UpdateProductDto {
   @IsString()
   @MaxLength(60)
   brand?: string;
-
-  /** `null` quita la imagen. */
-  @IsOptional()
-  @Transform(({ value }) => (value === '' ? null : value))
-  @IsUrl({ require_protocol: true })
-  imageUrl?: string | null;
 
   /** `null` deja el producto sin categoría. */
   @IsOptional()
