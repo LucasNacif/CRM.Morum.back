@@ -1,7 +1,4 @@
-import { Type } from 'class-transformer';
-import { IsDate, IsEnum, IsIn, IsInt, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
-import { PaginationDto } from '../common/pagination.dto.js';
-import { MovementType } from '../generated/prisma/client.js';
+import { IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 
 export class AdjustStockDto {
   @IsUUID()
@@ -14,28 +11,20 @@ export class AdjustStockDto {
   @IsInt()
   quantity: number;
 
+  /** Costo unitario de la reposición: pasa a ser el costo de la prenda. */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  cost?: number;
+
+  /** Nuevo precio de venta. Si no se manda, no cambia. */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  price?: number;
+
   @IsOptional()
   @IsString()
   @MaxLength(300)
   note?: string;
-}
-
-export class MovementsQueryDto extends PaginationDto {
-  @IsOptional()
-  @IsUUID()
-  variantId?: string;
-
-  @IsOptional()
-  @IsEnum(MovementType)
-  type?: MovementType;
-
-  @IsOptional()
-  @Type(() => Date)
-  @IsDate()
-  from?: Date;
-
-  @IsOptional()
-  @Type(() => Date)
-  @IsDate()
-  to?: Date;
 }

@@ -19,25 +19,30 @@ pnpm start:dev            # http://localhost:3000/api
 
 ## Cómo está armado
 
+- **Dos emprendimientos, datos separados.** Morum y Clarus comparten usuarios pero nada más:
+  productos, categorías, ventas y ajustes llevan `businessId`. El front indica el negocio activo en el
+  encabezado `X-Business` y todo acceso por id verifica que pertenezca a ese negocio. Los códigos de
+  barras son únicos entre los dos, así una etiqueta nunca se confunde.
 - **Stock por libro de movimientos.** `Variant.stock` nunca se edita directo: todo cambio pasa por
   `StockService.applyMovement`, que actualiza el saldo y registra un `StockMovement` en la misma
   transacción. El stock no puede quedar negativo, ni siquiera con dos ventas simultáneas.
-- **Producto → variantes.** Cada variante (talle + color) se identifica por su código de barras.
-  Los códigos internos son Code 128 numéricos de 8 dígitos (secuencia `barcode_seq`); también se
-  puede cargar el código de fábrica de la prenda.
+- **Ventas con seña.** Una venta puede cobrarse en partes: guarda lo pagado, la fecha acordada para el
+  saldo y si la prenda se entregó o quedó reservada. Cada pago queda en `Payment`.
+- **Producto → variantes.** Cada variante (talle + color) se identifica por su código de barras
+  numérico (Code 128, secuencia `barcode_seq`); también se puede cargar el código de fábrica.
 - **Nada con historial se borra.** Productos y variantes usados se desactivan; las
   ventas se anulan (y devuelven stock) en lugar de eliminarse.
 - **Auth.** JWT con guard global; solo `/api/auth/login` y `/api/health` son públicas.
 
 | Módulo | Rutas |
 | --- | --- |
-| Auth | `POST /auth/login`, `GET /auth/me`, `POST /auth/change-password` |
-| Productos | `/products`, `/products/:id/variants`, `/variants`, `GET /variants/lookup?code=` |
-| Categorías | `/categories` |
-| Stock | `GET /stock/movements`, `POST /stock/adjustments` |
-| Compras y ventas | `/purchases`, `/sales`, `POST /sales/:id/cancel` |
+| Auth y usuarios | `POST /auth/login`, `GET /auth/me`, `POST /auth/change-password`, `/users` |
+| Productos | `/products`, `/products/:id/variants`, `POST /products/:id/price`, `POST /products/prices/bulk`, `/variants`, `GET /variants/lookup?code=` |
+| Categorías y ajustes | `/categories`, `/settings` |
+| Stock | `POST /stock/adjustments` (reposición con costo y precio, salida o conteo) |
+| Ventas | `/sales`, `GET /sales/pending`, `POST /sales/:id/payments`, `POST /sales/:id/deliver`, `POST /sales/:id/cancel` |
 | Etiquetas | `GET /labels/layouts`, `POST /labels/pdf` |
-| Reportes | `GET /reports/dashboard`, `/reports/stock.csv`, `/reports/sales.csv` |
+| Reportes | `GET /reports/dashboard` |
 
 Todas las rutas llevan el prefijo `/api`.
 

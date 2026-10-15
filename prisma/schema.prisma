@@ -9,7 +9,9 @@ datasource db {
 
 enum MovementType {
   INITIAL
+  // Ya no se generan: quedan de cuando existían las compras.
   PURCHASE
+  RESTOCK
   SALE
   SALE_CANCEL
   ADJUSTMENT
@@ -28,6 +30,26 @@ enum SaleStatus {
   CANCELLED
 }
 
+enum Delivery {
+  DELIVERED
+  // Pagó una seña y la prenda queda apartada hasta que complete el pago.
+  RESERVED
+}
+
+/// Cada emprendimiento (Morum, Clarus). Sus datos están totalmente separados.
+model Business {
+  id             String   @id
+  name           String
+  // Última venta numerada: cada negocio lleva su propia numeración.
+  lastSaleNumber Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  settings   Settings?
+  categories Category[]
+  products   Product[]
+  sales      Sale[]
+}
+
 model User {
   id           String   @id @default(uuid())
   email        String   @unique
@@ -38,23 +60,31 @@ model User {
 
   movements StockMovement[]
   sales     Sale[]
-  purchases Purchase[]
+  payments  Payment[]
 }
 
-/// Configuración del negocio. Siempre hay una sola fila (id = 1).
 model Settings {
-  id            Int      @id @default(1)
+  businessId    String   @id
+  business      Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   // Porcentaje sobre el costo para sugerir el precio de venta.
   markupPercent Decimal  @default(100) @db.Decimal(7, 2)
+  // Múltiplo al que se redondean los precios sugeridos (0 = sin redondeo).
+  roundTo       Int      @default(0)
+  // Con cuántos días de anticipación avisar un saldo por cobrar.
+  dueAlertDays  Int      @default(3)
   updatedAt     DateTime @updatedAt
 }
 
 model Category {
   id        String   @id @default(uuid())
-  name      String   @unique
+  name      String
   createdAt DateTime @default(now())
 
-  products Product[]
+  businessId String
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  products   Product[]
+
+  @@unique([businessId, name])
 }
 
 model Product {
@@ -69,34 +99,36 @@ model Product {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  businessId String
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Restrict)
   categoryId String?
   category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   variants   Variant[]
 
-  @@index([name])
+  @@index([businessId, name])
   @@index([categoryId])
 }
 
 model Variant {
-  id       String  @id @default(uuid())
-  size     String
-  color    String
-  barcode  String  @unique
-  cost     Decimal @default(0) @db.Decimal(12, 2)
-  price    Decimal @default(0) @db.Decimal(12, 2)
+  id        String   @id @default(uuid())
+  size      String
+  color     String
+  // Único entre los dos negocios: una etiqueta nunca puede confundirse.
+  barcode   String   @unique
+  cost      Decimal  @default(0) @db.Decimal(12, 2)
+  price     Decimal  @default(0) @db.Decimal(12, 2)
   // Cache del saldo: solo se modifica junto con un StockMovement, en la misma transacción.
-  stock    Int     @default(0)
-  minStock Int     @default(0)
-  isActive Boolean @default(true)
+  stock     Int      @default(0)
+  minStock  Int      @default(0)
+  isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   productId String
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  movements     StockMovement[]
-  saleItems     SaleItem[]
-  purchaseItems PurchaseItem[]
+  movements StockMovement[]
+  saleItems SaleItem[]
 
   @@unique([productId, size, color])
   @@index([productId])
@@ -111,69 +143,49 @@ model StockMovement {
   note       String?
   createdAt  DateTime     @default(now())
 
-  variantId  String
-  variant    Variant   @relation(fields: [variantId], references: [id], onDelete: Restrict)
-  userId     String
-  user       User      @relation(fields: [userId], references: [id])
-  saleId     String?
-  sale       Sale?     @relation(fields: [saleId], references: [id])
-  purchaseId String?
-  purchase   Purchase? @relation(fields: [purchaseId], references: [id])
+  variantId String
+  variant   Variant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  userId    String
+  user      User    @relation(fields: [userId], references: [id])
+  saleId    String?
+  sale      Sale?   @relation(fields: [saleId], references: [id])
 
   @@index([variantId, createdAt])
   @@index([createdAt])
 }
 
-model Purchase {
-  id        String   @id @default(uuid())
-  number    Int      @unique @default(autoincrement())
-  date      DateTime @default(now())
-  total     Decimal  @db.Decimal(12, 2)
-  note      String?
-  createdAt DateTime @default(now())
-
-  userId String
-  user   User   @relation(fields: [userId], references: [id])
-
-  items     PurchaseItem[]
-  movements StockMovement[]
-
-  @@index([date])
-}
-
-model PurchaseItem {
-  id       String  @id @default(uuid())
-  quantity Int
-  unitCost Decimal @db.Decimal(12, 2)
-
-  purchaseId String
-  purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
-  variantId  String
-  variant    Variant  @relation(fields: [variantId], references: [id], onDelete: Restrict)
-
-  @@index([purchaseId])
-}
-
 model Sale {
   id            String        @id @default(uuid())
-  number        Int           @unique @default(autoincrement())
+  number        Int
   date          DateTime      @default(now())
   subtotal      Decimal       @db.Decimal(12, 2)
   discount      Decimal       @default(0) @db.Decimal(12, 2)
   total         Decimal       @db.Decimal(12, 2)
+  // Suma de los pagos recibidos. Si es menor al total, la venta tiene saldo por cobrar.
+  paidAmount    Decimal       @default(0) @db.Decimal(12, 2)
+  // Fecha acordada para cobrar el saldo.
+  dueDate       DateTime?
+  delivery      Delivery      @default(DELIVERED)
+  // Medio del pago hecho al momento de la venta.
   paymentMethod PaymentMethod
   status        SaleStatus    @default(COMPLETED)
   customerName  String?
+  customerPhone String?
   note          String?
   cancelledAt   DateTime?
 
-  userId String
-  user   User   @relation(fields: [userId], references: [id])
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
 
   items     SaleItem[]
+  payments  Payment[]
   movements StockMovement[]
 
-  @@index([date])
+  @@unique([businessId, number])
+  @@index([businessId, date])
+  @@index([businessId, dueDate])
 }
 
 model SaleItem {
@@ -187,6 +199,21 @@ model SaleItem {
   sale      Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
   variantId String
   variant   Variant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([saleId])
+}
+
+/// Cada pago de una venta: el del momento (total o seña) y los que completan el saldo.
+model Payment {
+  id        String        @id @default(uuid())
+  amount    Decimal       @db.Decimal(12, 2)
+  method    PaymentMethod
+  createdAt DateTime      @default(now())
+
+  saleId String
+  sale   Sale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
   @@index([saleId])
 }

@@ -48,16 +48,16 @@ export class UsersController {
     return this.prisma.user.create({ data: { ...data, passwordHash }, select: publicFields });
   }
 
-  /** Con ventas, compras o movimientos a su nombre se da de baja en lugar de borrarse. */
+  /** Con ventas, pagos o movimientos a su nombre se da de baja en lugar de borrarse. */
   @Delete(':id')
   async remove(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() current: AuthUser) {
     if (id === current.id) throw new BadRequestException('No podés eliminar tu propio usuario');
     const user = await this.prisma.user.findUniqueOrThrow({
       where: { id },
-      select: { _count: { select: { movements: true, sales: true, purchases: true } } },
+      select: { _count: { select: { movements: true, sales: true, payments: true } } },
     });
-    const { movements, sales, purchases } = user._count;
-    if (movements + sales + purchases > 0) {
+    const { movements, sales, payments } = user._count;
+    if (movements + sales + payments > 0) {
       await this.prisma.user.update({ where: { id }, data: { isActive: false } });
       return { deleted: false, deactivated: true };
     }

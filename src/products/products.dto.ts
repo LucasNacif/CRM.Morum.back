@@ -10,6 +10,7 @@ import {
   IsUrl,
   IsUUID,
   Matches,
+  Max,
   MaxLength,
   Min,
   MinLength,
@@ -209,4 +210,36 @@ export class VariantsQueryDto extends PaginationDto {
   @Transform(toBoolean)
   @IsBoolean()
   lowStock?: boolean;
+}
+
+export class SetPriceDto {
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  price: number;
+}
+
+export class BulkPricesDto {
+  /** Sin categoría se aplica a todos los productos activos del emprendimiento. */
+  @IsOptional()
+  @Transform(emptyToUndefined)
+  @IsUUID()
+  categoryId?: string;
+
+  /** Porcentaje de aumento (negativo para bajar). */
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(-90)
+  @Max(1000)
+  percent: number;
+
+  /** Múltiplo al que se redondea hacia arriba (0 = sin redondeo). */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100000)
+  roundTo?: number;
+
+  /** false o ausente: solo vista previa. */
+  @IsOptional()
+  @IsBoolean()
+  apply?: boolean;
 }

@@ -1,9 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { paginated } from '../common/pagination.dto.js';
+import { roundPrice } from '../common/pricing.js';
 import { MovementType, Prisma } from '../generated/prisma/client.js';
 import { PrismaService, type Tx } from '../prisma/prisma.service.js';
 import { StockService } from '../stock/stock.service.js';
 import {
+  BulkPricesDto,
   CreateProductDto,
   CreateVariantDto,
   ProductsQueryDto,
@@ -28,8 +30,9 @@ export class ProductsService {
     private readonly stock: StockService,
   ) {}
 
-  async list(q: ProductsQueryDto) {
+  async list(businessId: string, q: ProductsQueryDto) {
     const where: Prisma.ProductWhereInput = {
+      businessId,
       categoryId: q.categoryId,
       isActive: q.includeInactive ? undefined : true,
     };
@@ -54,41 +57,41 @@ export class ProductsService {
     return paginated(items, total, q);
   }
 
-  async get(id: string) {
-    const product = await this.prisma.product.findUnique({ where: { id }, include: productInclude });
+  async get(businessId: string, id: string) {
+    const product = await this.prisma.product.findFirst({ where: { id, businessId }, include: productInclude });
     if (!product) throw new NotFoundException('No se encontró el producto');
     return product;
   }
 
-  create(dto: CreateProductDto, userId: string) {
+  async create(businessId: string, dto: CreateProductDto, userId: string) {
     const { variants = [], ...data } = dto;
+    await this.assertCategory(businessId, data.categoryId);
     return this.prisma.$transaction(async (tx) => {
-      const product = await tx.product.create({ data });
+      const product = await tx.product.create({ data: { ...data, businessId } });
       await this.createVariants(tx, product, variants, userId);
       return tx.product.findUniqueOrThrow({ where: { id: product.id }, include: productInclude });
     });
   }
 
-  /** Alta de un producto dentro de una transacción ajena: la usa el registro de compras. */
-  async createInTransaction(
-    tx: Tx,
-    data: { name: string; categoryId?: string },
-    variants: CreateVariantDto[],
-    userId: string,
-  ) {
-    const product = await tx.product.create({ data });
-    return this.createVariants(tx, product, variants, userId);
+  async update(businessId: string, id: string, dto: UpdateProductDto) {
+    await this.get(businessId, id);
+    await this.assertCategory(businessId, dto.categoryId);
+    return this.prisma.product.update({ where: { id }, data: dto, include: productInclude });
   }
 
-  update(id: string, dto: UpdateProductDto) {
-    return this.prisma.product.update({ where: { id }, data: dto, include: productInclude });
+  /** Un mismo precio para todas las variantes del producto. */
+  async setPrice(businessId: string, id: string, price: number) {
+    await this.get(businessId, id);
+    await this.prisma.variant.updateMany({ where: { productId: id }, data: { price } });
+    return this.get(businessId, id);
   }
 
   /**
    * Un producto con historial no se borra: se desactiva, para no perder
-   * los movimientos, ventas y compras que lo referencian.
+   * los movimientos y ventas que lo referencian.
    */
-  async remove(id: string) {
+  async remove(businessId: string, id: string) {
+    await this.get(businessId, id);
     const used = await this.prisma.stockMovement.count({ where: { variant: { productId: id } } });
     if (used > 0) {
       await this.prisma.$transaction([
@@ -101,20 +104,21 @@ export class ProductsService {
     return { deleted: true, deactivated: false };
   }
 
-  addVariant(productId: string, dto: CreateVariantDto, userId: string) {
+  async addVariant(businessId: string, productId: string, dto: CreateVariantDto, userId: string) {
+    const product = await this.get(businessId, productId);
     return this.prisma.$transaction(async (tx) => {
-      const product = await tx.product.findUnique({ where: { id: productId } });
-      if (!product) throw new NotFoundException('No se encontró el producto');
       const [variant] = await this.createVariants(tx, product, [dto], userId);
       return tx.variant.findUniqueOrThrow({ where: { id: variant.id } });
     });
   }
 
-  updateVariant(id: string, dto: UpdateVariantDto) {
+  async updateVariant(businessId: string, id: string, dto: UpdateVariantDto) {
+    await this.getVariant(businessId, id);
     return this.prisma.variant.update({ where: { id }, data: dto });
   }
 
-  async removeVariant(id: string) {
+  async removeVariant(businessId: string, id: string) {
+    await this.getVariant(businessId, id);
     const used = await this.prisma.stockMovement.count({ where: { variantId: id } });
     if (used > 0) {
       await this.prisma.variant.update({ where: { id }, data: { isActive: false } });
@@ -124,16 +128,36 @@ export class ProductsService {
     return { deleted: true, deactivated: false };
   }
 
-  /** Busca por lo que lee el escáner: el código de barras exacto. */
-  async lookup(code: string) {
-    const value = code.trim();
-    const variant = await this.prisma.variant.findUnique({ where: { barcode: value }, include: variantInclude });
-    if (!variant) throw new NotFoundException(`No hay ninguna prenda con el código ${value}`);
+  async getVariant(businessId: string, id: string) {
+    const variant = await this.prisma.variant.findFirst({ where: { id, product: { businessId } }, include: variantInclude });
+    if (!variant) throw new NotFoundException('No se encontró la prenda');
     return variant;
   }
 
-  async listVariants(q: VariantsQueryDto) {
-    const conditions: Prisma.Sql[] = [Prisma.sql`v."isActive" AND p."isActive"`];
+  /**
+   * Busca por lo que lee el escáner: el código de barras exacto. Si la prenda es del otro
+   * emprendimiento se avisa cuál, para que el front ofrezca cambiar.
+   */
+  async lookup(businessId: string, code: string) {
+    const value = code.trim();
+    const variant = await this.prisma.variant.findUnique({
+      where: { barcode: value },
+      include: { product: { select: { id: true, name: true, brand: true, isActive: true, business: true } } },
+    });
+    if (!variant) throw new NotFoundException(`No hay ninguna prenda con el código ${value}`);
+    const { business, ...product } = variant.product;
+    if (business.id !== businessId) {
+      throw new ConflictException({
+        statusCode: 409,
+        message: `Esta prenda es de ${business.name}`,
+        businessId: business.id,
+      });
+    }
+    return { ...variant, product };
+  }
+
+  async listVariants(businessId: string, q: VariantsQueryDto) {
+    const conditions: Prisma.Sql[] = [Prisma.sql`p."businessId" = ${businessId} AND v."isActive" AND p."isActive"`];
     if (q.search) {
       const like = `%${q.search}%`;
       conditions.push(
@@ -162,6 +186,39 @@ export class ProductsService {
     const byId = new Map(variants.map((variant) => [variant.id, variant]));
     const items = ids.flatMap((id) => byId.get(id) ?? []);
     return paginated(items, count[0].total, q);
+  }
+
+  /**
+   * Aumento masivo de precios. Sin `apply` solo devuelve la vista previa; con `apply`
+   * actualiza todo en una transacción y devuelve lo que cambió.
+   */
+  async bulkPrices(businessId: string, dto: BulkPricesDto) {
+    await this.assertCategory(businessId, dto.categoryId);
+    const variants = await this.prisma.variant.findMany({
+      where: { isActive: true, product: { businessId, isActive: true, categoryId: dto.categoryId } },
+      include: { product: { select: { name: true } } },
+      orderBy: [{ product: { name: 'asc' } }, { color: 'asc' }, { size: 'asc' }],
+    });
+    const changes = variants
+      .map((variant) => {
+        const oldPrice = variant.price.toNumber();
+        const newPrice = roundPrice(oldPrice * (1 + dto.percent / 100), dto.roundTo ?? 0);
+        return { id: variant.id, name: variant.product.name, color: variant.color, size: variant.size, oldPrice, newPrice };
+      })
+      .filter((change) => change.newPrice !== change.oldPrice);
+
+    if (dto.apply) {
+      await this.prisma.$transaction(
+        changes.map((change) => this.prisma.variant.update({ where: { id: change.id }, data: { price: change.newPrice } })),
+      );
+    }
+    return { applied: dto.apply === true, count: changes.length, changes };
+  }
+
+  private async assertCategory(businessId: string, categoryId?: string | null) {
+    if (!categoryId) return;
+    const category = await this.prisma.category.findFirst({ where: { id: categoryId, businessId }, select: { id: true } });
+    if (!category) throw new BadRequestException('La categoría no existe');
   }
 
   private async createVariants(

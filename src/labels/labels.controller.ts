@@ -23,6 +23,7 @@ import {
 } from 'class-validator';
 import bwipjs from 'bwip-js/node';
 import PDFDocument from 'pdfkit';
+import { BusinessId } from '../common/business.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 const MM = 72 / 25.4;
@@ -77,7 +78,7 @@ interface Label {
 export class LabelsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async pdf(dto: LabelsPdfDto): Promise<Buffer> {
+  async pdf(businessId: string, dto: LabelsPdfDto): Promise<Buffer> {
     const layout = LAYOUTS[dto.layout];
     const perPage = layout.cols * layout.rows;
     const startAt = dto.startAt ?? 1;
@@ -90,7 +91,7 @@ export class LabelsService {
     }
 
     const variants = await this.prisma.variant.findMany({
-      where: { id: { in: dto.items.map((item) => item.variantId) } },
+      where: { id: { in: dto.items.map((item) => item.variantId) }, product: { businessId } },
       select: { id: true, size: true, color: true, barcode: true, product: { select: { name: true } } },
     });
     const byId = new Map(variants.map((variant) => [variant.id, variant]));
@@ -191,8 +192,8 @@ export class LabelsController {
 
   @HttpCode(200)
   @Post('pdf')
-  async pdf(@Body() dto: LabelsPdfDto) {
-    return new StreamableFile(await this.labels.pdf(dto), {
+  async pdf(@BusinessId() businessId: string, @Body() dto: LabelsPdfDto) {
+    return new StreamableFile(await this.labels.pdf(businessId, dto), {
       type: 'application/pdf',
       disposition: 'inline; filename="etiquetas.pdf"',
     });

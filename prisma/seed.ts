@@ -23,8 +23,21 @@ async function main() {
   });
   console.log(`Usuario listo: ${email}`);
 
-  for (const name of ['Remeras', 'Pantalones', 'Buzos', 'Camperas', 'Vestidos', 'Accesorios']) {
-    await prisma.category.upsert({ where: { name }, update: {}, create: { name } });
+  for (const business of [
+    { id: 'morum', name: 'Morum' },
+    { id: 'clarus', name: 'Clarus' },
+  ]) {
+    await prisma.business.upsert({ where: { id: business.id }, update: {}, create: business });
+    await prisma.settings.upsert({ where: { businessId: business.id }, update: {}, create: { businessId: business.id } });
+    // Solo en un negocio sin categorías: las que se borren desde la app no tienen que volver en cada deploy.
+    if ((await prisma.category.count({ where: { businessId: business.id } })) === 0) {
+      await prisma.category.createMany({
+        data: ['Remeras', 'Pantalones', 'Buzos', 'Camperas', 'Vestidos', 'Accesorios'].map((name) => ({
+          name,
+          businessId: business.id,
+        })),
+      });
+    }
   }
 }
 

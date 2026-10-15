@@ -1,8 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { paginated } from '../common/pagination.dto.js';
 import { MovementType, Prisma } from '../generated/prisma/client.js';
 import { PrismaService, type Tx } from '../prisma/prisma.service.js';
-import { AdjustStockDto, MovementsQueryDto } from './stock.dto.js';
+import { AdjustStockDto } from './stock.dto.js';
 
 export interface MovementInput {
   variantId: string;
@@ -12,7 +11,6 @@ export interface MovementInput {
   userId: string;
   note?: string;
   saleId?: string;
-  purchaseId?: string;
 }
 
 @Injectable()
@@ -47,12 +45,22 @@ export class StockService {
         userId: input.userId,
         note: input.note,
         saleId: input.saleId,
-        purchaseId: input.purchaseId,
       },
     });
   }
 
-  adjust(dto: AdjustStockDto, userId: string) {
+  /**
+   * Entrada, salida o conteo. Una entrada con costo es una reposición: actualiza el costo
+   * de la prenda y, si se manda, también el precio de venta.
+   */
+  async adjust(businessId: string, dto: AdjustStockDto, userId: string) {
+    const owned = await this.prisma.variant.count({ where: { id: dto.variantId, product: { businessId } } });
+    if (!owned) throw new NotFoundException('No se encontró la prenda');
+    const restock = dto.mode === 'delta' && dto.quantity > 0 && dto.cost !== undefined;
+    if ((dto.cost !== undefined || dto.price !== undefined) && !restock) {
+      throw new BadRequestException('El costo y el precio solo se cargan en una entrada de stock');
+    }
+
     return this.prisma.$transaction(async (tx) => {
       let delta = dto.quantity;
       if (dto.mode === 'set') {
@@ -61,42 +69,20 @@ export class StockService {
         const rows = await tx.$queryRaw<{ stock: number }[]>(
           Prisma.sql`SELECT "stock" FROM "Variant" WHERE "id" = ${dto.variantId} FOR UPDATE`,
         );
-        if (rows.length === 0) throw new NotFoundException('No se encontró la variante');
         delta = dto.quantity - rows[0].stock;
         if (delta === 0) throw new BadRequestException('El stock ya coincide con el conteo');
       }
-      return this.applyMovement(tx, {
+      const movement = await this.applyMovement(tx, {
         variantId: dto.variantId,
         quantity: delta,
-        type: MovementType.ADJUSTMENT,
+        type: restock ? MovementType.RESTOCK : MovementType.ADJUSTMENT,
         userId,
         note: dto.note,
       });
+      if (restock) {
+        await tx.variant.update({ where: { id: dto.variantId }, data: { cost: dto.cost, price: dto.price } });
+      }
+      return movement;
     });
-  }
-
-  async listMovements(q: MovementsQueryDto) {
-    const where: Prisma.StockMovementWhereInput = {
-      variantId: q.variantId,
-      type: q.type,
-      createdAt: q.from || q.to ? { gte: q.from, lte: q.to } : undefined,
-    };
-    const [items, total] = await Promise.all([
-      this.prisma.stockMovement.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip: q.skip,
-        take: q.pageSize,
-        include: {
-          variant: {
-            select: { barcode: true, size: true, color: true, product: { select: { id: true, name: true } } },
-          },
-          sale: { select: { id: true, number: true } },
-          purchase: { select: { id: true, number: true } },
-        },
-      }),
-      this.prisma.stockMovement.count({ where }),
-    ]);
-    return paginated(items, total, q);
   }
 }
