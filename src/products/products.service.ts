@@ -43,6 +43,8 @@ export class ProductsService {
       businessId,
       categoryId: q.categoryId,
       isActive: q.includeInactive ? undefined : true,
+      variants: q.purchaseId ? { some: { purchaseItems: { some: { purchaseId: q.purchaseId } } } } : undefined,
+      images: q.withoutImages ? { none: {} } : undefined,
     };
     if (q.search) {
       const contains = { contains: q.search, mode: 'insensitive' } as const;

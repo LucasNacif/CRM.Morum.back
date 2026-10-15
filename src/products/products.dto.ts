@@ -186,6 +186,17 @@ export class ProductsQueryDto extends PaginationDto {
   @Transform(toBoolean)
   @IsBoolean()
   includeInactive?: boolean;
+
+  /** Solo los productos que entraron en esta compra. */
+  @IsOptional()
+  @IsUUID()
+  purchaseId?: string;
+
+  /** Solo los productos que todavía no tienen ninguna foto. */
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  withoutImages?: boolean;
 }
 
 export class VariantsQueryDto extends PaginationDto {
