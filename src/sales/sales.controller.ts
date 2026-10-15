@@ -33,7 +33,7 @@ import { BusinessId } from '../common/business.js';
 import { CurrentUser, type AuthUser } from '../common/decorators.js';
 import { paginated, PaginationDto } from '../common/pagination.dto.js';
 import { Delivery, MovementType, PaymentMethod, Prisma, SaleStatus } from '../generated/prisma/client.js';
-import { PrismaService } from '../prisma/prisma.service.js';
+import { PrismaService, type Tx } from '../prisma/prisma.service.js';
 import { StockService } from '../stock/stock.service.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -68,10 +68,22 @@ export class CreateSaleDto {
   @Min(0)
   discount?: number;
 
-  @IsEnum(PaymentMethod)
-  paymentMethod: PaymentMethod;
+  /**
+   * Pagos del momento, uno por medio (ej. parte en efectivo y parte por transferencia).
+   * Si suman menos que el total, la diferencia queda como saldo por cobrar. Sin pagos es fiado.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => PaymentDto)
+  payments?: PaymentDto[];
 
-  /** Lo que paga ahora. Si no se envía, paga el total. Si es menor, queda saldo por cobrar. */
+  /** Forma anterior de un solo pago; se mantiene para versiones viejas del front. */
+  @IsOptional()
+  @IsEnum(PaymentMethod)
+  paymentMethod?: PaymentMethod;
+
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
@@ -117,6 +129,43 @@ export class PaymentDto {
   method: PaymentMethod;
 }
 
+/** Prendas que se suman a una venta ya hecha, con su cobro opcional. */
+export class AddItemsDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(100)
+  @ValidateNested({ each: true })
+  @Type(() => SaleItemDto)
+  items: SaleItemDto[];
+
+  /** Lo que se cobra en el momento. Si no cubre lo agregado, queda como saldo. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => PaymentDto)
+  payments?: PaymentDto[];
+
+  /** Días para cobrar el saldo, si la venta no tenía fecha acordada. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(365)
+  dueInDays?: number;
+
+  @IsOptional()
+  @Transform(trim)
+  @IsString()
+  @MaxLength(100)
+  customerName?: string;
+
+  @IsOptional()
+  @Transform(trim)
+  @IsString()
+  @MaxLength(40)
+  customerPhone?: string;
+}
+
 export class SalesQueryDto extends PaginationDto {
   @IsOptional()
   @Type(() => Date)
@@ -149,36 +198,54 @@ export class SalesService {
     private readonly stock: StockService,
   ) {}
 
-  create(businessId: string, dto: CreateSaleDto, userId: string) {
-    const variantIds = dto.items.map((item) => item.variantId);
+  /** Arma los renglones con el precio (actual o especial) y el costo del momento. */
+  private async priceItems(tx: Tx, businessId: string, requested: SaleItemDto[]) {
+    const variantIds = requested.map((item) => item.variantId);
     if (new Set(variantIds).size !== variantIds.length) {
       throw new BadRequestException('Hay una prenda repetida en la venta');
     }
+    const variants = await tx.variant.findMany({ where: { id: { in: variantIds }, product: { businessId } } });
+    const byId = new Map(variants.map((variant) => [variant.id, variant]));
+    const items = requested.map((item) => {
+      const variant = byId.get(item.variantId);
+      if (!variant) throw new NotFoundException('Una de las prendas ya no existe');
+      return {
+        variantId: variant.id,
+        quantity: item.quantity,
+        unitPrice: new Prisma.Decimal(item.unitPrice ?? variant.price),
+        unitCost: variant.cost,
+      };
+    });
+    const subtotal = items.reduce((sum, item) => sum.plus(item.unitPrice.times(item.quantity)), new Prisma.Decimal(0));
+    return { items, subtotal };
+  }
 
-    return this.prisma.$transaction(async (tx) => {
-      const variants = await tx.variant.findMany({ where: { id: { in: variantIds }, product: { businessId } } });
-      const byId = new Map(variants.map((variant) => [variant.id, variant]));
-
-      const items = dto.items.map((item) => {
-        const variant = byId.get(item.variantId);
-        if (!variant) throw new NotFoundException('Una de las prendas ya no existe');
-        return {
-          variantId: variant.id,
-          quantity: item.quantity,
-          unitPrice: new Prisma.Decimal(item.unitPrice ?? variant.price),
-          unitCost: variant.cost,
-        };
+  private async discountStock(tx: Tx, items: { variantId: string; quantity: number }[], sale: { id: string; number: number }, userId: string) {
+    // Una prenda reservada también sale del stock: no se puede vender a otro.
+    for (const item of items) {
+      await this.stock.applyMovement(tx, {
+        variantId: item.variantId,
+        quantity: -item.quantity,
+        type: MovementType.SALE,
+        userId,
+        saleId: sale.id,
+        note: `Venta #${sale.number}`,
       });
-      const subtotal = items.reduce(
-        (sum, item) => sum.plus(item.unitPrice.times(item.quantity)),
-        new Prisma.Decimal(0),
-      );
+    }
+  }
+
+  create(businessId: string, dto: CreateSaleDto, userId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const { items, subtotal } = await this.priceItems(tx, businessId, dto.items);
       const discount = new Prisma.Decimal(dto.discount ?? 0);
       if (discount.greaterThan(subtotal)) {
         throw new BadRequestException('El descuento no puede superar el subtotal');
       }
       const total = subtotal.minus(discount);
-      const paid = dto.paidAmount === undefined ? total : new Prisma.Decimal(dto.paidAmount);
+      const payments = (
+        dto.payments ?? (dto.paymentMethod ? [{ method: dto.paymentMethod, amount: dto.paidAmount ?? total.toNumber() }] : [])
+      ).filter((payment) => payment.amount > 0);
+      const paid = payments.reduce((sum, payment) => sum.plus(payment.amount), new Prisma.Decimal(0));
       if (paid.greaterThan(total)) throw new BadRequestException('Lo que paga no puede superar el total');
 
       const partial = paid.lessThan(total);
@@ -202,27 +269,65 @@ export class SalesService {
           paidAmount: paid,
           dueDate: partial ? new Date(Date.now() + dto.dueInDays! * DAY) : null,
           delivery: partial ? (dto.delivery ?? Delivery.DELIVERED) : Delivery.DELIVERED,
-          paymentMethod: dto.paymentMethod,
+          // Medio principal, para listados. Sin pagos (fiado) queda como "Otro".
+          paymentMethod: payments[0]?.method ?? PaymentMethod.OTHER,
           customerName: dto.customerName,
           customerPhone: dto.customerPhone,
           note: dto.note,
           userId,
           items: { create: items },
-          payments: paid.greaterThan(0) ? { create: { amount: paid, method: dto.paymentMethod, userId } } : undefined,
+          payments: { create: payments.map((payment) => ({ amount: payment.amount, method: payment.method, userId })) },
         },
       });
-      // Una prenda reservada también sale del stock: no se puede vender a otro.
-      for (const item of items) {
-        await this.stock.applyMovement(tx, {
-          variantId: item.variantId,
-          quantity: -item.quantity,
-          type: MovementType.SALE,
-          userId,
-          saleId: sale.id,
-          note: `Venta #${sale.number}`,
-        });
-      }
+      await this.discountStock(tx, items, sale, userId);
       return tx.sale.findUniqueOrThrow({ where: { id: sale.id }, include: saleInclude });
+    });
+  }
+
+  /**
+   * Suma prendas a una venta ya hecha (el cliente se lleva algo más). Lo agregado se cobra
+   * en el momento, en uno o varios medios, o queda como saldo con fecha de cobro.
+   */
+  addItems(businessId: string, id: string, dto: AddItemsDto, userId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<{ id: string }[]>(
+        Prisma.sql`SELECT "id" FROM "Sale" WHERE "id" = ${id} AND "businessId" = ${businessId} FOR UPDATE`,
+      );
+      if (rows.length === 0) throw new NotFoundException('No se encontró la venta');
+      const sale = await tx.sale.findUniqueOrThrow({ where: { id } });
+      if (sale.status === SaleStatus.CANCELLED) throw new ConflictException('La venta está anulada');
+
+      const { items, subtotal: added } = await this.priceItems(tx, businessId, dto.items);
+      const payments = dto.payments ?? [];
+      const paidNow = payments.reduce((sum, payment) => sum.plus(payment.amount), new Prisma.Decimal(0));
+      const total = sale.total.plus(added);
+      const paidAmount = sale.paidAmount.plus(paidNow);
+      if (paidAmount.greaterThan(total)) throw new BadRequestException('Lo que paga supera lo que debe');
+
+      const customerName = dto.customerName ?? sale.customerName;
+      const pending = paidAmount.lessThan(total);
+      let dueDate = sale.dueDate;
+      if (pending && !dueDate) {
+        if (!dto.dueInDays) throw new BadRequestException('Si queda saldo, indicá en cuántos días lo paga');
+        dueDate = new Date(Date.now() + dto.dueInDays * DAY);
+      }
+      if (pending && !customerName) throw new BadRequestException('Si queda saldo, cargá el nombre del cliente');
+
+      await tx.sale.update({
+        where: { id },
+        data: {
+          subtotal: sale.subtotal.plus(added),
+          total,
+          paidAmount,
+          dueDate,
+          customerName,
+          customerPhone: dto.customerPhone ?? sale.customerPhone,
+          items: { create: items },
+          payments: { create: payments.map((payment) => ({ amount: payment.amount, method: payment.method, userId })) },
+        },
+      });
+      await this.discountStock(tx, items, sale, userId);
+      return tx.sale.findUniqueOrThrow({ where: { id }, include: saleInclude });
     });
   }
 
@@ -372,6 +477,17 @@ export class SalesController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.sales.addPayment(businessId, id, dto, user.id);
+  }
+
+  @HttpCode(200)
+  @Post(':id/items')
+  addItems(
+    @BusinessId() businessId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AddItemsDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.sales.addItems(businessId, id, dto, user.id);
   }
 
   @HttpCode(200)

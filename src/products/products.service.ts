@@ -73,6 +73,19 @@ export class ProductsService {
     });
   }
 
+  /** Alta de un producto dentro de una transacción ajena: la usa el registro de compras. */
+  async createInTransaction(
+    tx: Tx,
+    businessId: string,
+    data: { name: string; categoryId?: string },
+    variants: CreateVariantDto[],
+    userId: string,
+  ) {
+    await this.assertCategory(businessId, data.categoryId);
+    const product = await tx.product.create({ data: { ...data, businessId } });
+    return this.createVariants(tx, product, variants, userId);
+  }
+
   async update(businessId: string, id: string, dto: UpdateProductDto) {
     await this.get(businessId, id);
     await this.assertCategory(businessId, dto.categoryId);

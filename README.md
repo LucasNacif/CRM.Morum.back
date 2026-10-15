@@ -27,7 +27,11 @@ pnpm start:dev            # http://localhost:3000/api
   `StockService.applyMovement`, que actualiza el saldo y registra un `StockMovement` en la misma
   transacción. El stock no puede quedar negativo, ni siquiera con dos ventas simultáneas.
 - **Ventas con seña.** Una venta puede cobrarse en partes: guarda lo pagado, la fecha acordada para el
-  saldo y si la prenda se entregó o quedó reservada. Cada pago queda en `Payment`.
+  saldo y si la prenda se entregó o quedó reservada. Cada pago queda en `Payment`, y una venta puede
+  cobrarse con varios medios a la vez o sumar prendas después de hecha.
+- **Compras.** Reponen prendas o dan de alta productos nuevos; el envío y el packaging se reparten en
+  partes iguales entre las unidades y el costo de cada prenda pasa a ser el de la última compra con esos
+  gastos incluidos. Los gastos sin stock (bolsas, percheros) suman al total de la compra.
 - **Producto → variantes.** Cada variante (talle + color) se identifica por su código de barras
   numérico (Code 128, secuencia `barcode_seq`); también se puede cargar el código de fábrica.
 - **Nada con historial se borra.** Productos y variantes usados se desactivan; las
@@ -40,7 +44,8 @@ pnpm start:dev            # http://localhost:3000/api
 | Productos | `/products`, `/products/:id/variants`, `POST /products/:id/price`, `POST /products/prices/bulk`, `/variants`, `GET /variants/lookup?code=` |
 | Categorías y ajustes | `/categories`, `/settings` |
 | Stock | `POST /stock/adjustments` (reposición con costo y precio, salida o conteo) |
-| Ventas | `/sales`, `GET /sales/pending`, `POST /sales/:id/payments`, `POST /sales/:id/deliver`, `POST /sales/:id/cancel` |
+| Ventas | `/sales`, `GET /sales/pending`, `POST /sales/:id/items`, `POST /sales/:id/payments`, `POST /sales/:id/deliver`, `POST /sales/:id/cancel` |
+| Compras | `/purchases` |
 | Etiquetas | `GET /labels/layouts`, `POST /labels/pdf` |
 | Reportes | `GET /reports/dashboard` |
 

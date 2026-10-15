@@ -11,6 +11,7 @@ export interface MovementInput {
   userId: string;
   note?: string;
   saleId?: string;
+  purchaseId?: string;
 }
 
 @Injectable()
@@ -45,6 +46,7 @@ export class StockService {
         userId: input.userId,
         note: input.note,
         saleId: input.saleId,
+        purchaseId: input.purchaseId,
       },
     });
   }
