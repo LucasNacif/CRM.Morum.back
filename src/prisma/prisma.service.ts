@@ -10,6 +10,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   constructor(config: ConfigService) {
     super({
       adapter: new PrismaPg({ connectionString: config.getOrThrow<string>('DATABASE_URL') }),
+      // Con la base en otra región cada consulta tarda; una compra grande no entra en los 5 s por defecto.
+      transactionOptions: { maxWait: 10_000, timeout: 60_000 },
     });
   }
 
