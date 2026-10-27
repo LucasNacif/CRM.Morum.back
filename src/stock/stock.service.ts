@@ -12,6 +12,11 @@ export interface MovementInput {
   note?: string;
   saleId?: string;
   purchaseId?: string;
+  /**
+   * Solo para ventas hechas sin conexión: la prenda ya se entregó, así que se registra aunque
+   * el saldo quede negativo. Quien llama marca la venta como sobreventa a revisar.
+   */
+  allowNegative?: boolean;
 }
 
 @Injectable()
@@ -20,7 +25,8 @@ export class StockService {
 
   /**
    * Único punto donde cambia el stock. El update atómico bloquea la fila, así dos
-   * ventas simultáneas de la última unidad no pueden dejar el saldo en negativo.
+   * ventas simultáneas de la última unidad no pueden dejar el saldo en negativo
+   * (salvo con `allowNegative`).
    */
   async applyMovement(tx: Tx, input: MovementInput) {
     if (!Number.isInteger(input.quantity) || input.quantity === 0) {
@@ -31,7 +37,9 @@ export class StockService {
       data: { stock: { increment: input.quantity } },
       select: { stock: true, size: true, color: true, product: { select: { name: true } } },
     });
-    if (variant.stock < 0) {
+    // Solo se frena lo que resta: tras una sobreventa el saldo puede estar en negativo y una
+    // anulación o reposición tiene que poder sumar aunque no alcance para dejarlo en cero.
+    if (variant.stock < 0 && input.quantity < 0 && !input.allowNegative) {
       const available = variant.stock - input.quantity;
       throw new ConflictException(
         `Stock insuficiente para ${variant.product.name} (${variant.color} ${variant.size}): hay ${available} y se pidieron ${-input.quantity}`,

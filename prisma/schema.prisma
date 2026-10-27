@@ -161,24 +161,29 @@ model StockMovement {
 }
 
 model Sale {
-  id            String        @id @default(uuid())
-  number        Int
-  date          DateTime      @default(now())
-  subtotal      Decimal       @db.Decimal(12, 2)
-  discount      Decimal       @default(0) @db.Decimal(12, 2)
-  total         Decimal       @db.Decimal(12, 2)
+  id                 String        @id @default(uuid())
+  number             Int
+  date               DateTime      @default(now())
+  subtotal           Decimal       @db.Decimal(12, 2)
+  discount           Decimal       @default(0) @db.Decimal(12, 2)
+  total              Decimal       @db.Decimal(12, 2)
   // Suma de los pagos recibidos. Si es menor al total, la venta tiene saldo por cobrar.
-  paidAmount    Decimal       @default(0) @db.Decimal(12, 2)
+  paidAmount         Decimal       @default(0) @db.Decimal(12, 2)
   // Fecha acordada para cobrar el saldo.
-  dueDate       DateTime?
-  delivery      Delivery      @default(DELIVERED)
+  dueDate            DateTime?
+  delivery           Delivery      @default(DELIVERED)
   // Medio del pago hecho al momento de la venta.
-  paymentMethod PaymentMethod
-  status        SaleStatus    @default(COMPLETED)
-  customerName  String?
-  customerPhone String?
-  note          String?
-  cancelledAt   DateTime?
+  paymentMethod      PaymentMethod
+  status             SaleStatus    @default(COMPLETED)
+  customerName       String?
+  customerPhone      String?
+  note               String?
+  cancelledAt        DateTime?
+  // Cobrada en un celular sin conexión y subida después: `date` es cuándo se vendió, no cuándo llegó.
+  offline            Boolean       @default(false)
+  // Al subirla, alguna prenda quedó con stock negativo: se vendió también en otro lado. Se revisa a mano.
+  oversold           Boolean       @default(false)
+  oversoldReviewedAt DateTime?
 
   businessId String
   business   Business @relation(fields: [businessId], references: [id], onDelete: Restrict)

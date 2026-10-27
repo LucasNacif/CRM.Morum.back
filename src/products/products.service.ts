@@ -185,6 +185,29 @@ export class ProductsService {
     return { ...variant, product };
   }
 
+  /**
+   * Todas las prendas a la venta del negocio, para la copia que guarda el celular y le permite
+   * vender sin conexión. Solo lo que hace falta para escanear, buscar y cobrar.
+   */
+  catalog(businessId: string) {
+    return this.prisma.variant.findMany({
+      where: { isActive: true, product: { businessId, isActive: true } },
+      select: {
+        id: true,
+        productId: true,
+        size: true,
+        color: true,
+        barcode: true,
+        price: true,
+        stock: true,
+        minStock: true,
+        isActive: true,
+        product: { select: { id: true, name: true, brand: true, isActive: true } },
+      },
+      orderBy: [{ product: { name: 'asc' } }, { color: 'asc' }, { size: 'asc' }],
+    });
+  }
+
   async listVariants(businessId: string, q: VariantsQueryDto) {
     const conditions: Prisma.Sql[] = [Prisma.sql`p."businessId" = ${businessId} AND v."isActive" AND p."isActive"`];
     if (q.search) {

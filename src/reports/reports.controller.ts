@@ -33,7 +33,7 @@ export class ReportsService {
     const last14 = new Date(today.getTime() - 13 * DAY);
     const last30 = new Date(today.getTime() - 29 * DAY);
 
-    const [[stock], lowStock, salesToday, salesMonth, collectedToday, collectedMonth, [monthCost], [receivable], topProducts, salesByDay] =
+    const [[stock], lowStock, salesToday, salesMonth, collectedToday, collectedMonth, [monthCost], [receivable], topProducts, salesByDay, oversold] =
       await Promise.all([
         this.prisma.$queryRaw<
           { units: number; costValue: number; retailValue: number; variants: number; lowStockCount: number }[]
@@ -84,6 +84,7 @@ export class ReportsService {
           FROM "Sale" s
           WHERE s."businessId" = ${businessId} AND s."status" = 'COMPLETED' AND s."date" >= ${last14}
           GROUP BY 1 ORDER BY 1`),
+        this.prisma.sale.count({ where: { businessId, oversold: true, oversoldReviewedAt: null } }),
       ]);
 
     // Se completan los días sin ventas para que la serie no tenga huecos.
@@ -101,6 +102,8 @@ export class ReportsService {
       receivable,
       topProducts,
       salesByDay: series,
+      // Ventas sin conexión que al subirse dejaron stock negativo y nadie revisó todavía.
+      oversold,
     };
   }
 

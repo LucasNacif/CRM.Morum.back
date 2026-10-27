@@ -86,6 +86,11 @@ export class VariantsController {
     return this.products.listVariants(businessId, q);
   }
 
+  @Get('catalog')
+  catalog(@BusinessId() businessId: string) {
+    return this.products.catalog(businessId);
+  }
+
   @Get('lookup')
   lookup(@BusinessId() businessId: string, @Query('code') code?: string) {
     if (!code?.trim()) throw new BadRequestException('Falta el código a buscar');

@@ -17,6 +17,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsDate,
   IsEnum,
   IsInt,
@@ -55,6 +56,23 @@ export class SaleItemDto {
 }
 
 export class CreateSaleDto {
+  /**
+   * Id generado por el celular. Si la venta ya llegó (un reintento tras un corte), se devuelve
+   * la existente en lugar de registrarla dos veces.
+   */
+  @IsOptional()
+  @IsUUID()
+  id?: string;
+
+  /**
+   * Cuándo se cobró, si se hizo sin conexión y se sube después. La venta se registra aunque
+   * alguna prenda quede con stock negativo, y queda marcada para revisar.
+   */
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  soldAt?: Date;
+
   @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(200)
@@ -176,13 +194,19 @@ export class SalesQueryDto extends PaginationDto {
   @Type(() => Date)
   @IsDate()
   to?: Date;
+
+  /** Solo las sobreventas sin revisar. */
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  oversold?: boolean;
 }
 
 const saleInclude = {
   items: {
     include: {
       variant: {
-        select: { barcode: true, size: true, color: true, product: { select: { id: true, name: true } } },
+        select: { barcode: true, size: true, color: true, stock: true, product: { select: { id: true, name: true } } },
       },
     },
   },
@@ -220,21 +244,63 @@ export class SalesService {
     return { items, subtotal };
   }
 
-  private async discountStock(tx: Tx, items: { variantId: string; quantity: number }[], sale: { id: string; number: number }, userId: string) {
+  /** Descuenta las prendas vendidas. Devuelve si alguna quedó en negativo (solo posible con `allowNegative`). */
+  private async discountStock(
+    tx: Tx,
+    items: { variantId: string; quantity: number }[],
+    sale: { id: string; number: number },
+    userId: string,
+    allowNegative = false,
+  ) {
+    let oversold = false;
     // Una prenda reservada también sale del stock: no se puede vender a otro.
     for (const item of items) {
-      await this.stock.applyMovement(tx, {
+      const movement = await this.stock.applyMovement(tx, {
         variantId: item.variantId,
         quantity: -item.quantity,
         type: MovementType.SALE,
         userId,
         saleId: sale.id,
         note: `Venta #${sale.number}`,
+        allowNegative,
       });
+      if (movement.stockAfter < 0) oversold = true;
+    }
+    return oversold;
+  }
+
+  async create(businessId: string, dto: CreateSaleDto, userId: string) {
+    if (dto.id) {
+      const existing = await this.prisma.sale.findUnique({ where: { id: dto.id }, include: saleInclude });
+      if (existing) return this.alreadyRegistered(existing, businessId);
+    }
+    try {
+      return await this.register(businessId, dto, userId);
+    } catch (error) {
+      // Dos reintentos de la misma venta a la vez: el segundo choca con el id y devuelve la del primero.
+      if (dto.id && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const existing = await this.prisma.sale.findUnique({ where: { id: dto.id }, include: saleInclude });
+        if (existing) return this.alreadyRegistered(existing, businessId);
+      }
+      throw error;
     }
   }
 
-  create(businessId: string, dto: CreateSaleDto, userId: string) {
+  private alreadyRegistered<T extends { businessId: string }>(sale: T, businessId: string) {
+    if (sale.businessId !== businessId) throw new ConflictException('Ese id de venta ya está en uso');
+    return sale;
+  }
+
+  private register(businessId: string, dto: CreateSaleDto, userId: string) {
+    // Una venta con fecha propia se cobró sin conexión: la prenda ya se entregó.
+    const offline = dto.soldAt !== undefined;
+    if (dto.soldAt) {
+      // Margen hacia adelante por relojes de celular desfasados.
+      if (dto.soldAt.getTime() > Date.now() + 10 * 60_000) throw new BadRequestException('La fecha de la venta está en el futuro');
+      if (dto.soldAt.getTime() < Date.now() - 90 * DAY) throw new BadRequestException('La venta tiene más de 90 días: cargala a mano');
+    }
+    const soldAt = dto.soldAt ?? new Date();
+
     return this.prisma.$transaction(async (tx) => {
       const { items, subtotal } = await this.priceItems(tx, businessId, dto.items);
       const discount = new Prisma.Decimal(dto.discount ?? 0);
@@ -261,13 +327,16 @@ export class SalesService {
 
       const sale = await tx.sale.create({
         data: {
+          id: dto.id,
           businessId,
           number,
+          date: soldAt,
+          offline,
           subtotal,
           discount,
           total,
           paidAmount: paid,
-          dueDate: partial ? new Date(Date.now() + dto.dueInDays! * DAY) : null,
+          dueDate: partial ? new Date(soldAt.getTime() + dto.dueInDays! * DAY) : null,
           delivery: partial ? (dto.delivery ?? Delivery.DELIVERED) : Delivery.DELIVERED,
           // Medio principal, para listados. Sin pagos (fiado) queda como "Otro".
           paymentMethod: payments[0]?.method ?? PaymentMethod.OTHER,
@@ -276,12 +345,25 @@ export class SalesService {
           note: dto.note,
           userId,
           items: { create: items },
-          payments: { create: payments.map((payment) => ({ amount: payment.amount, method: payment.method, userId })) },
+          payments: {
+            create: payments.map((payment) => ({ amount: payment.amount, method: payment.method, userId, createdAt: soldAt })),
+          },
         },
       });
-      await this.discountStock(tx, items, sale, userId);
+      const oversold = await this.discountStock(tx, items, sale, userId, offline);
+      if (oversold) await tx.sale.update({ where: { id: sale.id }, data: { oversold: true } });
       return tx.sale.findUniqueOrThrow({ where: { id: sale.id }, include: saleInclude });
     });
+  }
+
+  /** Da por resuelta una sobreventa: se repuso, se le avisó al cliente o se corrigió el stock. */
+  async reviewOversold(businessId: string, id: string) {
+    const { count } = await this.prisma.sale.updateMany({
+      where: { id, businessId, oversold: true, oversoldReviewedAt: null },
+      data: { oversoldReviewedAt: new Date() },
+    });
+    if (count === 0) throw new ConflictException('La venta no tiene una sobreventa pendiente de revisar');
+    return this.get(businessId, id);
   }
 
   /**
@@ -391,6 +473,7 @@ export class SalesService {
     const where: Prisma.SaleWhereInput = {
       businessId,
       date: q.from || q.to ? { gte: q.from, lte: q.to } : undefined,
+      ...(q.oversold && { oversold: true, oversoldReviewedAt: null }),
     };
     const [items, total] = await Promise.all([
       this.prisma.sale.findMany({
@@ -494,6 +577,12 @@ export class SalesController {
   @Post(':id/deliver')
   deliver(@BusinessId() businessId: string, @Param('id', ParseUUIDPipe) id: string) {
     return this.sales.deliver(businessId, id);
+  }
+
+  @HttpCode(200)
+  @Post(':id/oversold-reviewed')
+  reviewOversold(@BusinessId() businessId: string, @Param('id', ParseUUIDPipe) id: string) {
+    return this.sales.reviewOversold(businessId, id);
   }
 
   @HttpCode(200)
