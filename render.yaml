@@ -6,7 +6,9 @@ services:
     plan: free
     region: virginia
     # --prod=false instala también las devDependencies (Nest CLI, Prisma CLI y tsx) que usa el build.
-    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm build && pnpm db:deploy && pnpm db:seed
+    # Sin `db:seed`: solo hacía falta para el primer deploy (admin y negocios), y correrlo en cada build hacía
+    # depender el deploy de la base sin aportar nada. Para una base nueva se corre a mano una sola vez.
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm build && pnpm db:deploy
     startCommand: pnpm start:prod
     healthCheckPath: /api/health
     envVars:
